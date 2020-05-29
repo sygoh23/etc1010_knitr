@@ -1,0 +1,66 @@
+---
+title: "ETC1010_Project_download"
+author: "me"
+date: "15/05/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+The code below downloads relevant libraries
+```{r}
+library(rtweet)
+library(tidyverse)
+library(tidytext)
+```
+
+The code below downloads a dataframe of tweets through the rtweet API
+
+If you want to download tweets you need to get a twitter developer license which is free but takes a day or two to get approved. This code will not run because i have excluded my keys, check the bottom for a way to open the tweet tibble and look at it.
+```{r}
+appname <- "Learning through tweets"
+
+## api key (example below is not a real key)
+key <- "secret"
+
+## api secret (example below is not a real key)
+secret <- "secret"
+
+access_token = "secret"
+
+access_secret = "secret"
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = access_token,
+  access_secret = access_secret)
+```
+
+This code downloads a dataframe of tweets. We have used it multiple times because it limits the volume of tweets that can be downloaded every 15 mins. max_id is set to specify the timing of the tweets.
+```{r}
+covid_tweets <- search_tweets(q = "covid -filter:retweets",
+                               n = 15000,lang = "en",max_id = 1261704398777495561)
+
+#we have set the language to english 
+#n=15000 directs us to download 150000 tweets. 
+```
+
+
+I have saved the file as an RDS to preserve nested lists
+```{r}
+saveRDS(covid_tweets, file = "tweets_n.rds")
+```
+
+You can read an RDS like this:
+```{r}
+saved_data <- readRDS(file = "practice_tweets_set.rds")
+saved_data
+```
+

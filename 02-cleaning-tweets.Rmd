@@ -1,0 +1,205 @@
+---
+title: "cleaning"
+author: "me"
+date: "22/05/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+load libraries
+```{r}
+library(lubridate)
+library(readxl)
+library(textdata)
+library(simputation)
+library(rtweet)
+library(tidyverse)
+library(tidytext)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(rgeos)
+library(lubridate)
+library(textdata)
+library(stringr)
+```
+
+load tweets into a single dataframe
+```{r}
+saved_data_1 <- readRDS(file = "tweets_1.rds")
+saved_data_2 <- readRDS(file = "tweets_2.rds")
+saved_data_3 <- readRDS(file = "tweets_3.rds")
+saved_data_4 <- readRDS(file = "tweets_4.rds")
+saved_data_5 <- readRDS(file = "tweets_5.rds")
+saved_data_6 <- readRDS(file = "tweets_6.rds")
+saved_data_7 <- readRDS(file = "tweets_7.rds")
+saved_data <- rbind(saved_data_1,saved_data_2,saved_data_3,saved_data_4,saved_data_5,saved_data_6,saved_data_7)
+saved_data
+#add an index column
+saved_data$index <- 1:nrow(saved_data)
+#add a time of day column
+saved_data<- saved_data%>% mutate(time=hms(created_at))
+```
+
+
+
+Get the numbers of specific things that are mentioned in the tweets
+```{r}
+#add a column with the number of hashtags present in a document
+saved_data<-saved_data%>% select(index,hashtags)%>%unnest(hashtags)%>% filter(!is.na(hashtags))%>%group_by(index)%>%summarise(hashtag_count=n())%>% right_join(saved_data)%>%mutate(hashtag_count=ifelse(!is.na(hashtag_count),hashtag_count,0))
+saved_data
+#add a variable for the number of mentioned screen names in a tweet
+saved_data<-saved_data%>% select(index,mentions_screen_name)%>%unnest(mentions_screen_name)%>% filter(!is.na(mentions_screen_name))%>%group_by(index)%>%summarise(name_counts=n())%>% right_join(saved_data)%>%mutate(name_counts=ifelse(!is.na(name_counts),name_counts,0))
+
+#add a variable for the number of mentioned urls
+saved_data<-saved_data%>% select(index,urls_url)%>%unnest(urls_url)%>% filter(!is.na(urls_url))%>%group_by(index)%>%summarise(url_count=n())%>% right_join(saved_data)%>%mutate(url_count=ifelse(!is.na(url_count),url_count,0))
+
+#add binary variables for if the tweet had any favourites and if they mentioned more than 1 friend
+saved_data<- saved_data %>% mutate(engagement_binary=ifelse(favorite_count>0,1,0))%>%
+  mutate(binary_friends=ifelse(name_counts>1,1,0))
+```
+
+look at basic data qualities
+```{r}
+#about half of the tweets have any favourites
+#the reason this is so low is because many of the tweets are likely from bots
+mean(saved_data$engagement_binary)
+#we compare the number of data points, unique tweet contents, and tweeters
+length(saved_data$index)
+length(unique(saved_data$text))
+length(unique(saved_data$user_id))
+```
+
+we select only variables that could be useful
+```{r}
+intermediate_step<- saved_data %>% select(c("index","user_id","status_id","created_at","screen_name","text","source","display_text_width","is_quote","reply_to_screen_name","favorite_count","retweet_count","lang","quoted_name","quoted_followers_count","quoted_verified","place_type","country","country_code","bbox_coords","coords_coords","location","description","followers_count","friends_count","listed_count","statuses_count","favourites_count","account_created_at","verified","hashtag_count","engagement_binary","binary_friends","name_counts","url_count"))
+intermediate_step
+```
+
+tokenise the text data to get the number of sentiment words
+```{r}
+#create a separate text data frame
+text_data<-intermediate_step%>%select(c("index","text"))%>%
+  unnest_tokens(output = word,input = text,token = "words",to_lower=TRUE)
+text_data
+```
+
+count the number of words in each tweet so we can standardise sentiment later if we want to
+```{r}
+word_counts<-text_data %>%group_by(index)%>%summarise(num_words=n())
+word_counts
+```
+
+use the text dataframe to get sentiment word numbers for each tweet
+```{r}
+sentiments<- get_sentiments("nrc")
+tidy_tweets_sentiment <-text_data %>%
+  inner_join(sentiments)%>%
+  group_by(index,sentiment)%>%
+  summarise(count=n())%>%
+  pivot_wider(names_from=c("sentiment"),values_from=count)
+#impute zeros into sentiment data
+tidy_tweets_sentiment[is.na(tidy_tweets_sentiment)] <- 0
+tidy_tweets_sentiment
+```
+
+
+get the average positivity of the words in a tweet
+```{r}
+sentiments<- get_sentiments("afinn")
+tidy_tweets_positive <-text_data %>%
+  inner_join(sentiments)%>%
+  group_by(index)%>%
+  summarise(average_positive_sentiment=mean(value))
+tidy_tweets_positive
+```
+
+join information into a single table
+```{r}
+tweets_with_sentiment<-left_join(intermediate_step,word_counts)%>%left_join(tidy_tweets_sentiment)%>%left_join(tidy_tweets_positive)
+tweets_with_sentiment
+```
+
+save data
+```{r}
+saveRDS(tweets_with_sentiment, file = "tweets_final")
+tweets_with_sentiment
+```
+
+
+
+extract tweet locations from dataframe, Note that this takes a while
+I've saved the result so dont run this code chunk
+```{r, cache=TRUE,include = FALSE}
+get_locations<-function(input_data){
+  geo_locations<-input_data%>%
+  select(c("bbox_coords","location","index"))%>%
+  unnest_wider(bbox_coords,names_repair = "minimal",names_sep="_")%>%
+  filter(!is.na(`bbox_coords_...1`))%>%
+  mutate(x=(bbox_coords_...1+bbox_coords_...2+bbox_coords_...4+bbox_coords_...3)/4,
+         y=(bbox_coords_...5+bbox_coords_...6+bbox_coords_...7+bbox_coords_...8)/4)%>%
+  select(c("location","index","x","y"))
+  return(geo_locations)
+}
+
+geo_locations <- tweets_with_sentiment %>% filter(index<300)%>%get_locations()
+
+
+for (i in 3:1050) {
+  print(i)
+  temp_locations <- tweets_with_sentiment %>% 
+    filter(index>=100*i&index<100*(i+1))%>%
+    get_locations()
+  geo_locations <- geo_locations %>% bind_rows(temp_locations)
+}
+
+geo_locations
+saveRDS(geo_locations, file = "geo_locations_of_tweets.rds")
+```
+
+Save the locations so we dont have to run the above code again
+```{r}
+geo_locations<-readRDS(file = "geo_locations_of_tweets.rds")
+geo_locations
+```
+
+
+
+Load covid data so we can match it to tweet location
+```{r}
+covid_data<-read_csv(file="owid-covid-data.csv")%>%filter(yday(date)==yday("2020-05-20"))%>% select(location,date,total_cases,new_cases,total_deaths,new_deaths,total_cases_per_million,new_cases_per_million,new_deaths_per_million,population,population_density,median_age)
+covid_data
+```
+
+Load geological data and define a function that returns the closest country to each tweet's location. Note that this process only allows for rough estimates.
+
+Mutate the closest country as a new column
+```{r}
+location_data<-read_excel("geo_countries.xlsx")
+
+#find the closest country to a pair of lattitude and longitude coordinates
+min_country<-function(x,y){
+  min_country<-"no_country_yet"
+  minval<-100000
+  for(i in 1:240){
+    a=((x-location_data$Longitude[i])^2+(y-location_data$Latitude[i])^2)
+    min_country<-ifelse(a<minval,location_data$Country[i],min_country)
+    minval<-ifelse(a<minval,a,minval)
+  }
+  return(min_country)
+}
+
+geo_locations<-geo_locations%>%mutate(closest_country=min_country(x,y))
+```
+
+join the locations and the covid data, save the results
+```{r}
+tweet_location_character<- left_join(geo_locations,covid_data,by=c("closest_country"="location"))
+saveRDS(tweet_location_character, file = "geo_characteristics_of_tweets.rds")
+```
+
+
+
